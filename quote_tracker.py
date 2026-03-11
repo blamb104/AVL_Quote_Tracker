@@ -5,13 +5,17 @@ import datetime
 import pandas as pd
 import json
 import os
+import re
 
 # --- CONFIGURATION ---
-# The name of the secret key in Streamlit Cloud "Advanced Settings > Secrets"
 SECRET_KEY_NAME = "gcp_service_account"
-# The name of the local file for development
 LOCAL_SERVICE_ACCOUNT_FILE = 'service_account.json'
 SPREADSHEET_NAME = 'AVL_Quote_Database'
+
+def clean_json_string(json_str):
+    """Removes control characters and invisible formatting from JSON strings."""
+    # This regex removes non-printable control characters that cause 'Invalid control character' errors
+    return re.sub(r'[\x00-\x1F\x7F]', '', json_str)
 
 def connect_to_sheets():
     """Establishes connection to the Google Sheet using Secrets or Local File."""
@@ -23,8 +27,10 @@ def connect_to_sheets():
     try:
         # 1. Try to load from Streamlit Cloud Secrets first
         if SECRET_KEY_NAME in st.secrets:
-            # Parse the JSON string from secrets
-            creds_info = json.loads(st.secrets[SECRET_KEY_NAME])
+            raw_json = st.secrets[SECRET_KEY_NAME]
+            # Clean the string to handle "Invalid control character" errors
+            cleaned_json = clean_json_string(raw_json)
+            creds_info = json.loads(cleaned_json)
             credentials = Credentials.from_service_account_info(creds_info, scopes=scopes)
         
         # 2. Fallback to local file if secrets aren't found (for local testing)
@@ -40,6 +46,10 @@ def connect_to_sheets():
         gc = gspread.authorize(credentials)
         return gc.open(SPREADSHEET_NAME).sheet1
         
+    except json.JSONDecodeError as je:
+        st.error(f"JSON Formatting Error in Secrets: {je}")
+        st.info("Try re-pasting your JSON into the Secrets box. Ensure it starts with { and ends with }.")
+        return None
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
@@ -169,6 +179,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-if __name__ == "__main__":
-
-    main()
