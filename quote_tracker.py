@@ -57,7 +57,6 @@ def get_next_quote_number(sheet):
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 15)
-        # Updated PDF Branding
         self.cell(0, 10, 'D&L AV - QUOTE', 0, 1, 'C')
         self.ln(5)
 
@@ -91,12 +90,15 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
     pdf.ln()
 
     pdf.set_font("Arial", size=10)
-    for index, row in parts_df.iterrows():
-        if row['Description']:
-            line_total = row['Qty'] * row['Price']
-            pdf.cell(100, 8, str(row['Description']), 1)
-            pdf.cell(20, 8, str(row['Qty']), 1)
-            pdf.cell(35, 8, f"${row['Price']:,.2f}", 1)
+    for _, row in parts_df.iterrows():
+        desc = str(row.get('Description', ''))
+        if desc.strip():
+            qty = float(row.get('Qty', 0))
+            price = float(row.get('Price', 0))
+            line_total = qty * price
+            pdf.cell(100, 8, desc, 1)
+            pdf.cell(20, 8, str(qty), 1)
+            pdf.cell(35, 8, f"${price:,.2f}", 1)
             pdf.cell(35, 8, f"${line_total:,.2f}", 1)
             pdf.ln()
 
@@ -112,12 +114,15 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
     pdf.ln()
 
     pdf.set_font("Arial", size=10)
-    for index, row in labor_df.iterrows():
-        if row['Service']:
-            line_total = row['Hours'] * row['Rate']
-            pdf.cell(100, 8, str(row['Service']), 1)
-            pdf.cell(20, 8, str(row['Hours']), 1)
-            pdf.cell(35, 8, f"${row['Rate']:,.2f}", 1)
+    for _, row in labor_df.iterrows():
+        service = str(row.get('Service', ''))
+        if service.strip():
+            hours = float(row.get('Hours', 0))
+            rate = float(row.get('Rate', 0))
+            line_total = hours * rate
+            pdf.cell(100, 8, service, 1)
+            pdf.cell(20, 8, str(hours), 1)
+            pdf.cell(35, 8, f"${rate:,.2f}", 1)
             pdf.cell(35, 8, f"${line_total:,.2f}", 1)
             pdf.ln()
 
@@ -142,13 +147,12 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
     pdf.cell(40, 10, "GRAND TOTAL:")
     pdf.cell(30, 10, f"${totals['grand_total']:,.2f}", ln=True)
 
-    return pdf.output(dest='S')
+    # Convert output to bytes explicitly to prevent Streamlit unsupported_error
+    return bytes(pdf.output())
 
 def main():
-    # Updated Browser Tab Branding
     st.set_page_config(page_title="D&L AV Quote Tool", page_icon="🔊", layout="centered")
 
-    # Updated Main UI Branding
     st.title("🔊 D&L AV Quote Tool")
     st.markdown("---")
 
@@ -176,8 +180,11 @@ def main():
         num_rows="dynamic", key="labor_editor", use_container_width=True
     )
 
-    parts_subtotal = (parts_data["Qty"] * parts_data["Price"]).sum()
-    labor_subtotal = (labor_data["Hours"] * labor_data["Rate"]).sum()
+    # Robust calculations handling empty rows or strings
+    parts_subtotal = (pd.to_numeric(parts_data["Qty"], errors='coerce').fillna(0) * pd.to_numeric(parts_data["Price"], errors='coerce').fillna(0)).sum()
+    
+    labor_subtotal = (pd.to_numeric(labor_data["Hours"], errors='coerce').fillna(0) * pd.to_numeric(labor_data["Rate"], errors='coerce').fillna(0)).sum()
+    
     subtotal = parts_subtotal + labor_subtotal
     discount_val = subtotal * (discount_rate / 100)
     taxable_amount = subtotal - discount_val
@@ -215,17 +222,21 @@ def main():
                     st.success(f"Saved as {quote_num}!")
                     st.session_state['last_quote_num'] = quote_num
 
-        # PDF Button
+        # PDF Button logic
         current_q_num = st.session_state.get('last_quote_num', "DRAFT")
-        pdf_bytes = create_pdf(current_q_num, client_name, project_name, parts_data, labor_data, totals_dict)
         
-        st.download_button(
-            label="📄 Download PDF Quote",
-            data=pdf_bytes,
-            file_name=f"DL_AV_Quote_{client_name.replace(' ', '_')}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
+        try:
+            pdf_bytes = create_pdf(current_q_num, client_name, project_name, parts_data, labor_data, totals_dict)
+            
+            st.download_button(
+                label="📄 Download PDF Quote",
+                data=pdf_bytes,
+                file_name=f"DL_AV_Quote_{client_name.replace(' ', '_')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        except Exception as pdf_err:
+            st.error(f"Error generating PDF: {pdf_err}")
 
         csv = pd.concat([parts_data.assign(Type="Part"), labor_data.assign(Type="Labor")]).to_csv(index=False).encode('utf-8')
         st.download_button(label="📊 Export CSV", data=csv, file_name="dl_av_quote_export.csv", mime='text/csv', use_container_width=True)
