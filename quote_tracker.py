@@ -106,7 +106,7 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
     pdf.ln(5)
     # Labor Table
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Labor / Services", ln=True)
+    pdf.cell(0, 10, "Labor & Services", ln=True)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(100, 8, "Service", 1)
     pdf.cell(20, 8, "Hours", 1)
@@ -246,3 +246,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
