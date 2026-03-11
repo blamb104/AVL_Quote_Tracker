@@ -11,7 +11,6 @@ from fpdf import FPDF
 # --- CONFIGURATION ---
 SECRET_KEY_NAME = "gcp_service_account"
 LOCAL_SERVICE_ACCOUNT_FILE = 'service_account.json'
-# Updated to match your actual Google Sheet name
 SPREADSHEET_NAME = 'AVL_Quote_Database'
 
 def clean_json_string(json_str):
@@ -19,7 +18,7 @@ def clean_json_string(json_str):
     return re.sub(r'[\x00-\x1F\x7F]', '', json_str)
 
 def connect_to_sheets():
-    """Establishes connection to the Google Sheet using Secrets or Local File."""
+    """Establishes connection to the Google Sheet."""
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
@@ -44,6 +43,7 @@ def connect_to_sheets():
 def get_next_quote_number(sheet):
     """Calculates the next AVL number based on the sheet history."""
     try:
+        if not sheet: return "AVL-1000"
         column_values = sheet.col_values(1)
         if len(column_values) <= 1:
             return "AVL-1000"
@@ -150,35 +150,50 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
 
     return bytes(pdf.output())
 
+def reset_quote():
+    """Clears session state to start a fresh quote."""
+    st.session_state.parts_df = pd.DataFrame([{"Description": "", "Qty": 1, "Price": 0.0}])
+    st.session_state.labor_df = pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 40.0}])
+    st.session_state.client_name = ""
+    st.session_state.project_name = ""
+    st.session_state.last_quote_num = None
+
 def main():
     st.set_page_config(page_title="D&L AV Quote Tool", page_icon="🔊", layout="centered")
 
-    st.title("🔊 D&L AV Quote Tool")
+    # Initialize State
+    if 'parts_df' not in st.session_state:
+        st.session_state.parts_df = pd.DataFrame([{"Description": "", "Qty": 1, "Price": 0.0}])
+    if 'labor_df' not in st.session_state:
+        st.session_state.labor_df = pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 40.0}])
+
+    st.title("D&L AV Quote Tool")
     st.markdown("---")
 
     sheet = connect_to_sheets()
-    if not sheet:
-        st.info(f"💡 Connect to Google Sheets (Target: {SPREADSHEET_NAME}) to enable saving.")
     
     with st.sidebar:
         st.header("Project Details")
-        client_name = st.text_input("Client Name", value="Client Name")
-        project_name = st.text_input("Project Name", value="Project Title")
-        # Default Tax Rate 10%
+        client_name = st.text_input("Client Name", key="client_name")
+        project_name = st.text_input("Project Name", key="project_name")
         tax_rate = st.number_input("Tax Rate (%)", value=10.0, step=0.01)
         discount_rate = st.number_input("Discount (%)", value=0.0, step=0.5)
+        
+        st.markdown("---")
+        if st.button("Start New Quote", use_container_width=True, type="secondary"):
+            reset_quote()
+            st.rerun()
 
     st.subheader("🛠 Equipment / Parts")
     parts_data = st.data_editor(
-        pd.DataFrame([{"Description": "", "Qty": 1, "Price": 0.0}]),
+        st.session_state.parts_df,
         num_rows="dynamic", key="parts_editor", use_container_width=True
     )
 
     st.markdown("---")
-    st.subheader("👷 Labor / Services")
-    # Default Labor Rate 40.0
+    st.subheader("Labor & Services")
     labor_data = st.data_editor(
-        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 40.0}]),
+        st.session_state.labor_df,
         num_rows="dynamic", key="labor_editor", use_container_width=True
     )
 
@@ -211,8 +226,10 @@ def main():
     with res_col2:
         st.write("### Actions")
         
-        if sheet and st.button("🚀 Save Quote to Google Sheets", use_container_width=True):
-            if not client_name or not project_name:
+        if st.button("Save Quote to Google Sheets", use_container_width=True, type="primary"):
+            if not sheet:
+                st.error("Connection to Google Sheets failed.")
+            elif not client_name or not project_name:
                 st.error("Please enter Client and Project names.")
             else:
                 with st.spinner("Saving..."):
@@ -227,23 +244,14 @@ def main():
         try:
             pdf_bytes = create_pdf(current_q_num, client_name, project_name, parts_data, labor_data, totals_dict)
             st.download_button(
-                label="📄 Download PDF Quote",
+                label="Download PDF Quote",
                 data=pdf_bytes,
-                file_name=f"DL_AV_Quote_{client_name.replace(' ', '_')}.pdf",
+                file_name=f"DL_AV_Quote_{client_name.replace(' ', '_') if client_name else 'Draft'}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
         except Exception as pdf_err:
             st.error(f"Error generating PDF: {pdf_err}")
 
-        csv = pd.concat([parts_data.assign(Type="Part"), labor_data.assign(Type="Labor")]).to_csv(index=False).encode('utf-8')
-        st.download_button(label="📊 Export CSV", data=csv, file_name="dl_av_quote_export.csv", mime='text/csv', use_container_width=True)
-
-    with st.expander("📊 View Recent Saved Quotes"):
-        if sheet and st.button("Refresh Data"):
-            data = sheet.get_all_records()
-            if data: st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
-
 if __name__ == "__main__":
     main()
-
