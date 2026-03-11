@@ -184,7 +184,7 @@ def main():
             reset_quote()
             st.rerun()
 
-    st.subheader("🛠 Equipment / Parts")
+    st.subheader("Equipment & Parts")
     parts_data = st.data_editor(
         st.session_state.parts_df,
         num_rows="dynamic", key="parts_editor", use_container_width=True
@@ -255,3 +255,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
