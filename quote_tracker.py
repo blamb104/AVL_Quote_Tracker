@@ -45,12 +45,18 @@ def get_next_quote_number(sheet):
     try:
         if not sheet: return "AVL-1000"
         column_values = sheet.col_values(1)
+        # If only header exists or empty
         if len(column_values) <= 1:
             return "AVL-1000"
+        
+        # Look for the last entry that follows the AVL-XXXX format
         last_entry = column_values[-1]
         if '-' in last_entry:
-            last_num = int(last_entry.split('-')[1])
-            return f"AVL-{last_num + 1}"
+            try:
+                last_num = int(last_entry.split('-')[1])
+                return f"AVL-{last_num + 1}"
+            except ValueError:
+                return "AVL-1000"
         return "AVL-1000"
     except:
         return "AVL-1000"
@@ -58,7 +64,7 @@ def get_next_quote_number(sheet):
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 15)
-        self.cell(0, 10, 'D&L AV - QUOTE', 0, 1, 'C')
+        self.cell(0, 10, 'QUOTE', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
@@ -156,7 +162,8 @@ def reset_quote():
     st.session_state.labor_df = pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 40.0}])
     st.session_state.client_name = ""
     st.session_state.project_name = ""
-    st.session_state.last_quote_num = None
+    # We clear the active quote num so it fetches a fresh one on next check
+    st.session_state.active_quote_num = None
 
 def main():
     st.set_page_config(page_title="D&L AV Quote Tool", page_icon="🔊", layout="centered")
@@ -166,14 +173,23 @@ def main():
         st.session_state.parts_df = pd.DataFrame([{"Description": "", "Qty": 1, "Price": 0.0}])
     if 'labor_df' not in st.session_state:
         st.session_state.labor_df = pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 40.0}])
+    if 'active_quote_num' not in st.session_state:
+        st.session_state.active_quote_num = None
 
     st.title("D&L AV Quote Tool")
     st.markdown("---")
 
     sheet = connect_to_sheets()
     
+    # If we don't have an active quote number yet (fresh load), try to get it
+    if st.session_state.active_quote_num is None and sheet:
+        st.session_state.active_quote_num = get_next_quote_number(sheet)
+
     with st.sidebar:
         st.header("Project Details")
+        # Display the quote number in the sidebar for visibility
+        st.info(f"Draft Quote: **{st.session_state.active_quote_num or 'Connecting...'}**")
+        
         client_name = st.text_input("Client Name", key="client_name")
         project_name = st.text_input("Project Name", key="project_name")
         tax_rate = st.number_input("Tax Rate (%)", value=10.0, step=0.01)
@@ -233,13 +249,14 @@ def main():
                 st.error("Please enter Client and Project names.")
             else:
                 with st.spinner("Saving..."):
-                    quote_num = get_next_quote_number(sheet)
-                    new_row = [quote_num, datetime.date.today().strftime("%Y-%m-%d"), client_name, project_name, grand_total]
+                    # We fetch the number again right before saving to ensure no collisions
+                    final_quote_num = get_next_quote_number(sheet)
+                    new_row = [final_quote_num, datetime.date.today().strftime("%Y-%m-%d"), client_name, project_name, grand_total]
                     sheet.append_row(new_row)
-                    st.success(f"Saved to {SPREADSHEET_NAME} as {quote_num}!")
-                    st.session_state['last_quote_num'] = quote_num
+                    st.success(f"Saved to {SPREADSHEET_NAME} as {final_quote_num}!")
+                    st.session_state.active_quote_num = final_quote_num
 
-        current_q_num = st.session_state.get('last_quote_num', "DRAFT")
+        current_q_num = st.session_state.active_quote_num or "DRAFT"
         
         try:
             pdf_bytes = create_pdf(current_q_num, client_name, project_name, parts_data, labor_data, totals_dict)
@@ -255,4 +272,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
