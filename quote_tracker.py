@@ -3,24 +3,43 @@ import gspread
 from google.oauth2.service_account import Credentials
 import datetime
 import pandas as pd
+import json
+import os
 
 # --- CONFIGURATION ---
-# Ensure service_account.json is in the same directory
-SERVICE_ACCOUNT_FILE = 'service_account.json'
+# The name of the secret key in Streamlit Cloud "Advanced Settings > Secrets"
+SECRET_KEY_NAME = "gcp_service_account"
+# The name of the local file for development
+LOCAL_SERVICE_ACCOUNT_FILE = 'service_account.json'
 SPREADSHEET_NAME = 'AVL_Quote_Database'
 
 def connect_to_sheets():
-    """Establishes connection to the Google Sheet."""
+    """Establishes connection to the Google Sheet using Secrets or Local File."""
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
     ]
+    
     try:
-        credentials = Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=scopes
-        )
+        # 1. Try to load from Streamlit Cloud Secrets first
+        if SECRET_KEY_NAME in st.secrets:
+            # Parse the JSON string from secrets
+            creds_info = json.loads(st.secrets[SECRET_KEY_NAME])
+            credentials = Credentials.from_service_account_info(creds_info, scopes=scopes)
+        
+        # 2. Fallback to local file if secrets aren't found (for local testing)
+        elif os.path.exists(LOCAL_SERVICE_ACCOUNT_FILE):
+            credentials = Credentials.from_service_account_file(
+                LOCAL_SERVICE_ACCOUNT_FILE, scopes=scopes
+            )
+        
+        else:
+            st.error("Credential Error: 'service_account.json' not found locally, and 'gcp_service_account' not found in Streamlit Secrets.")
+            return None
+            
         gc = gspread.authorize(credentials)
         return gc.open(SPREADSHEET_NAME).sheet1
+        
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
@@ -49,7 +68,7 @@ def main():
     # Connect to database
     sheet = connect_to_sheets()
     if not sheet:
-        st.warning("Please check your service_account.json and spreadsheet sharing settings.")
+        st.info("💡 Pro Tip: If you just added secrets, you may need to 'Reboot App' in the Streamlit Cloud dashboard.")
         return
 
     # Sidebar: Project Info
@@ -60,7 +79,7 @@ def main():
         tax_rate = st.number_input("Tax Rate (%)", value=10.0, step=0.01)
         discount_rate = st.number_input("Discount (%)", value=0.0, step=0.5)
 
-    # Main Area: Itemized Entry (Stacked Vertically)
+    # Main Area: Itemized Entry
     st.subheader("🛠 Equipment / Parts")
     parts_data = st.data_editor(
         pd.DataFrame([{"Description": "", "Qty": 1, "Price": 0.0}]),
@@ -123,7 +142,7 @@ def main():
                     st.success(f"Quote {quote_num} saved successfully!")
                     st.balloons()
 
-        # Export to CSV for local printing/records
+        # Export to CSV
         full_export = pd.concat([
             parts_data.assign(Type="Part"), 
             labor_data.rename(columns={"Service": "Description", "Hours": "Qty", "Rate": "Price"}).assign(Type="Labor")
@@ -148,4 +167,8 @@ def main():
                 st.write("No data found.")
 
 if __name__ == "__main__":
+    main()
+
+if __name__ == "__main__":
+
     main()
