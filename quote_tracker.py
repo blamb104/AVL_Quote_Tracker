@@ -11,6 +11,7 @@ from fpdf import FPDF
 # --- CONFIGURATION ---
 SECRET_KEY_NAME = "gcp_service_account"
 LOCAL_SERVICE_ACCOUNT_FILE = 'service_account.json'
+# Updated to match your actual Google Sheet name
 SPREADSHEET_NAME = 'AVL_Quote_Database'
 
 def clean_json_string(json_str):
@@ -81,7 +82,7 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
 
     # Equipment Table
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Equipment / Parts", ln=True)
+    pdf.cell(0, 10, "Parts & Equipment", ln=True)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(100, 8, "Description", 1)
     pdf.cell(20, 8, "Qty", 1)
@@ -147,7 +148,6 @@ def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
     pdf.cell(40, 10, "GRAND TOTAL:")
     pdf.cell(30, 10, f"${totals['grand_total']:,.2f}", ln=True)
 
-    # Convert output to bytes explicitly to prevent Streamlit unsupported_error
     return bytes(pdf.output())
 
 def main():
@@ -158,12 +158,13 @@ def main():
 
     sheet = connect_to_sheets()
     if not sheet:
-        st.info("💡 Connect to Google Sheets to enable saving and history.")
+        st.info(f"💡 Connect to Google Sheets (Target: {SPREADSHEET_NAME}) to enable saving.")
     
     with st.sidebar:
         st.header("Project Details")
         client_name = st.text_input("Client Name", value="Client Name")
         project_name = st.text_input("Project Name", value="Project Title")
+        # Default Tax Rate 10%
         tax_rate = st.number_input("Tax Rate (%)", value=10.0, step=0.01)
         discount_rate = st.number_input("Discount (%)", value=0.0, step=0.5)
 
@@ -175,14 +176,14 @@ def main():
 
     st.markdown("---")
     st.subheader("👷 Labor / Services")
+    # Default Labor Rate 40.0
     labor_data = st.data_editor(
-        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 95.0}]),
+        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 40.0}]),
         num_rows="dynamic", key="labor_editor", use_container_width=True
     )
 
-    # Robust calculations handling empty rows or strings
+    # Calculations
     parts_subtotal = (pd.to_numeric(parts_data["Qty"], errors='coerce').fillna(0) * pd.to_numeric(parts_data["Price"], errors='coerce').fillna(0)).sum()
-    
     labor_subtotal = (pd.to_numeric(labor_data["Hours"], errors='coerce').fillna(0) * pd.to_numeric(labor_data["Rate"], errors='coerce').fillna(0)).sum()
     
     subtotal = parts_subtotal + labor_subtotal
@@ -210,7 +211,6 @@ def main():
     with res_col2:
         st.write("### Actions")
         
-        # Save Button
         if sheet and st.button("🚀 Save Quote to Google Sheets", use_container_width=True):
             if not client_name or not project_name:
                 st.error("Please enter Client and Project names.")
@@ -219,15 +219,13 @@ def main():
                     quote_num = get_next_quote_number(sheet)
                     new_row = [quote_num, datetime.date.today().strftime("%Y-%m-%d"), client_name, project_name, grand_total]
                     sheet.append_row(new_row)
-                    st.success(f"Saved as {quote_num}!")
+                    st.success(f"Saved to {SPREADSHEET_NAME} as {quote_num}!")
                     st.session_state['last_quote_num'] = quote_num
 
-        # PDF Button logic
         current_q_num = st.session_state.get('last_quote_num', "DRAFT")
         
         try:
             pdf_bytes = create_pdf(current_q_num, client_name, project_name, parts_data, labor_data, totals_dict)
-            
             st.download_button(
                 label="📄 Download PDF Quote",
                 data=pdf_bytes,
