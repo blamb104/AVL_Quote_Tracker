@@ -6,6 +6,7 @@ import pandas as pd
 import json
 import os
 import re
+from fpdf import FPDF
 
 # --- CONFIGURATION ---
 SECRET_KEY_NAME = "gcp_service_account"
@@ -14,7 +15,6 @@ SPREADSHEET_NAME = 'AVL_Quote_Database'
 
 def clean_json_string(json_str):
     """Removes control characters and invisible formatting from JSON strings."""
-    # This regex removes non-printable control characters that cause 'Invalid control character' errors
     return re.sub(r'[\x00-\x1F\x7F]', '', json_str)
 
 def connect_to_sheets():
@@ -23,35 +23,21 @@ def connect_to_sheets():
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
     ]
-    
     try:
-        # 1. Try to load from Streamlit Cloud Secrets first
         if SECRET_KEY_NAME in st.secrets:
             raw_json = st.secrets[SECRET_KEY_NAME]
-            # Clean the string to handle "Invalid control character" errors
             cleaned_json = clean_json_string(raw_json)
             creds_info = json.loads(cleaned_json)
             credentials = Credentials.from_service_account_info(creds_info, scopes=scopes)
-        
-        # 2. Fallback to local file if secrets aren't found (for local testing)
         elif os.path.exists(LOCAL_SERVICE_ACCOUNT_FILE):
             credentials = Credentials.from_service_account_file(
                 LOCAL_SERVICE_ACCOUNT_FILE, scopes=scopes
             )
-        
         else:
-            st.error("Credential Error: 'service_account.json' not found locally, and 'gcp_service_account' not found in Streamlit Secrets.")
             return None
-            
         gc = gspread.authorize(credentials)
         return gc.open(SPREADSHEET_NAME).sheet1
-        
-    except json.JSONDecodeError as je:
-        st.error(f"JSON Formatting Error in Secrets: {je}")
-        st.info("Try re-pasting your JSON into the Secrets box. Ensure it starts with { and ends with }.")
-        return None
-    except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+    except Exception:
         return None
 
 def get_next_quote_number(sheet):
@@ -60,7 +46,6 @@ def get_next_quote_number(sheet):
         column_values = sheet.col_values(1)
         if len(column_values) <= 1:
             return "AVL-1000"
-        
         last_entry = column_values[-1]
         if '-' in last_entry:
             last_num = int(last_entry.split('-')[1])
@@ -69,56 +54,141 @@ def get_next_quote_number(sheet):
     except:
         return "AVL-1000"
 
-def main():
-    st.set_page_config(page_title="AVL Quote Tool", page_icon="🔊", layout="centered")
+class PDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 15)
+        # Updated PDF Branding
+        self.cell(0, 10, 'D&L AV - QUOTE', 0, 1, 'C')
+        self.ln(5)
 
-    st.title("🔊 AVL Quote Tool")
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+def create_pdf(quote_num, client, project, parts_df, labor_df, totals):
+    pdf = PDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+
+    # Header Info
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, f"Quote #: {quote_num}", ln=True)
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, f"Date: {datetime.date.today().strftime('%B %d, %Y')}", ln=True)
+    pdf.cell(0, 10, f"Client: {client}", ln=True)
+    pdf.cell(0, 10, f"Project: {project}", ln=True)
+    pdf.ln(10)
+
+    # Equipment Table
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Equipment / Parts", ln=True)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(100, 8, "Description", 1)
+    pdf.cell(20, 8, "Qty", 1)
+    pdf.cell(35, 8, "Unit Price", 1)
+    pdf.cell(35, 8, "Total", 1)
+    pdf.ln()
+
+    pdf.set_font("Arial", size=10)
+    for index, row in parts_df.iterrows():
+        if row['Description']:
+            line_total = row['Qty'] * row['Price']
+            pdf.cell(100, 8, str(row['Description']), 1)
+            pdf.cell(20, 8, str(row['Qty']), 1)
+            pdf.cell(35, 8, f"${row['Price']:,.2f}", 1)
+            pdf.cell(35, 8, f"${line_total:,.2f}", 1)
+            pdf.ln()
+
+    pdf.ln(5)
+    # Labor Table
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Labor / Services", ln=True)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(100, 8, "Service", 1)
+    pdf.cell(20, 8, "Hours", 1)
+    pdf.cell(35, 8, "Rate", 1)
+    pdf.cell(35, 8, "Total", 1)
+    pdf.ln()
+
+    pdf.set_font("Arial", size=10)
+    for index, row in labor_df.iterrows():
+        if row['Service']:
+            line_total = row['Hours'] * row['Rate']
+            pdf.cell(100, 8, str(row['Service']), 1)
+            pdf.cell(20, 8, str(row['Hours']), 1)
+            pdf.cell(35, 8, f"${row['Rate']:,.2f}", 1)
+            pdf.cell(35, 8, f"${line_total:,.2f}", 1)
+            pdf.ln()
+
+    # Totals Summary
+    pdf.ln(10)
+    pdf.set_x(120)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(40, 8, "Subtotal:")
+    pdf.cell(30, 8, f"${totals['subtotal']:,.2f}", ln=True)
+    
+    if totals['discount'] > 0:
+        pdf.set_x(120)
+        pdf.cell(40, 8, f"Discount ({totals['discount_rate']}%):")
+        pdf.cell(30, 8, f"-${totals['discount']:,.2f}", ln=True)
+
+    pdf.set_x(120)
+    pdf.cell(40, 8, f"Tax ({totals['tax_rate']}%):")
+    pdf.cell(30, 8, f"${totals['tax']:,.2f}", ln=True)
+    
+    pdf.set_x(120)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(40, 10, "GRAND TOTAL:")
+    pdf.cell(30, 10, f"${totals['grand_total']:,.2f}", ln=True)
+
+    return pdf.output(dest='S')
+
+def main():
+    # Updated Browser Tab Branding
+    st.set_page_config(page_title="D&L AV Quote Tool", page_icon="🔊", layout="centered")
+
+    # Updated Main UI Branding
+    st.title("🔊 D&L AV Quote Tool")
     st.markdown("---")
 
-    # Connect to database
     sheet = connect_to_sheets()
     if not sheet:
-        st.info("💡 Pro Tip: If you just added secrets, you may need to 'Reboot App' in the Streamlit Cloud dashboard.")
-        return
-
-    # Sidebar: Project Info
+        st.info("💡 Connect to Google Sheets to enable saving and history.")
+    
     with st.sidebar:
         st.header("Project Details")
-        client_name = st.text_input("Client Name")
-        project_name = st.text_input("Project Name")
+        client_name = st.text_input("Client Name", value="Client Name")
+        project_name = st.text_input("Project Name", value="Project Title")
         tax_rate = st.number_input("Tax Rate (%)", value=10.0, step=0.01)
         discount_rate = st.number_input("Discount (%)", value=0.0, step=0.5)
 
-    # Main Area: Itemized Entry
     st.subheader("🛠 Equipment / Parts")
     parts_data = st.data_editor(
         pd.DataFrame([{"Description": "", "Qty": 1, "Price": 0.0}]),
-        num_rows="dynamic",
-        key="parts_editor",
-        use_container_width=True
+        num_rows="dynamic", key="parts_editor", use_container_width=True
     )
 
     st.markdown("---")
-    
     st.subheader("👷 Labor / Services")
     labor_data = st.data_editor(
-        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 30.0}]),
-        num_rows="dynamic",
-        key="labor_editor",
-        use_container_width=True
+        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 95.0}]),
+        num_rows="dynamic", key="labor_editor", use_container_width=True
     )
 
-    # Calculations
     parts_subtotal = (parts_data["Qty"] * parts_data["Price"]).sum()
     labor_subtotal = (labor_data["Hours"] * labor_data["Rate"]).sum()
-    
     subtotal = parts_subtotal + labor_subtotal
     discount_val = subtotal * (discount_rate / 100)
     taxable_amount = subtotal - discount_val
     tax_val = taxable_amount * (tax_rate / 100)
     grand_total = taxable_amount + tax_val
 
-    # Summary Card
+    totals_dict = {
+        "subtotal": subtotal, "discount": discount_val, "discount_rate": discount_rate,
+        "tax": tax_val, "tax_rate": tax_rate, "grand_total": grand_total
+    }
+
     st.markdown("---")
     res_col1, res_col2 = st.columns([1.5, 1])
     
@@ -126,57 +196,44 @@ def main():
         st.subheader("Quote Summary")
         summary_df = pd.DataFrame({
             "Category": ["Parts Subtotal", "Labor Subtotal", f"Discount ({discount_rate}%)", f"Tax ({tax_rate}%)", "Grand Total"],
-            "Amount": [
-                f"${parts_subtotal:,.2f}", 
-                f"${labor_subtotal:,.2f}", 
-                f"-${discount_val:,.2f}", 
-                f"${tax_val:,.2f}", 
-                f"${grand_total:,.2f}"
-            ]
+            "Amount": [f"${parts_subtotal:,.2f}", f"${labor_subtotal:,.2f}", f"-${discount_val:,.2f}", f"${tax_val:,.2f}", f"${grand_total:,.2f}"]
         })
         st.table(summary_df)
 
     with res_col2:
         st.write("### Actions")
-        if st.button("🚀 Save Quote to Google Sheets", use_container_width=True):
-            if not client_name or not project_name:
-                st.error("Please enter Client and Project names before saving.")
-            else:
-                with st.spinner("Syncing with Google Sheets..."):
-                    quote_num = get_next_quote_number(sheet)
-                    date_str = datetime.date.today().strftime("%Y-%m-%d")
-                    
-                    new_row = [quote_num, date_str, client_name, project_name, grand_total]
-                    sheet.append_row(new_row)
-                    
-                    st.success(f"Quote {quote_num} saved successfully!")
-                    st.balloons()
-
-        # Export to CSV
-        full_export = pd.concat([
-            parts_data.assign(Type="Part"), 
-            labor_data.rename(columns={"Service": "Description", "Hours": "Qty", "Rate": "Price"}).assign(Type="Labor")
-        ])
         
-        csv = full_export.to_csv(index=False).encode('utf-8')
+        # Save Button
+        if sheet and st.button("🚀 Save Quote to Google Sheets", use_container_width=True):
+            if not client_name or not project_name:
+                st.error("Please enter Client and Project names.")
+            else:
+                with st.spinner("Saving..."):
+                    quote_num = get_next_quote_number(sheet)
+                    new_row = [quote_num, datetime.date.today().strftime("%Y-%m-%d"), client_name, project_name, grand_total]
+                    sheet.append_row(new_row)
+                    st.success(f"Saved as {quote_num}!")
+                    st.session_state['last_quote_num'] = quote_num
+
+        # PDF Button
+        current_q_num = st.session_state.get('last_quote_num', "DRAFT")
+        pdf_bytes = create_pdf(current_q_num, client_name, project_name, parts_data, labor_data, totals_dict)
+        
         st.download_button(
-            label="📄 Export Current Quote as CSV",
-            data=csv,
-            file_name=f"AVL_Quote_{client_name.replace(' ', '_')}_{datetime.date.today()}.csv",
-            mime='text/csv',
+            label="📄 Download PDF Quote",
+            data=pdf_bytes,
+            file_name=f"DL_AV_Quote_{client_name.replace(' ', '_')}.pdf",
+            mime="application/pdf",
             use_container_width=True
         )
 
-    # View History
+        csv = pd.concat([parts_data.assign(Type="Part"), labor_data.assign(Type="Labor")]).to_csv(index=False).encode('utf-8')
+        st.download_button(label="📊 Export CSV", data=csv, file_name="dl_av_quote_export.csv", mime='text/csv', use_container_width=True)
+
     with st.expander("📊 View Recent Saved Quotes"):
-        if st.button("Refresh Data"):
+        if sheet and st.button("Refresh Data"):
             data = sheet.get_all_records()
-            if data:
-                st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
-            else:
-                st.write("No data found.")
+            if data: st.dataframe(pd.DataFrame(data).tail(10), use_container_width=True)
 
 if __name__ == "__main__":
     main()
-
-
