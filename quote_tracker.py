@@ -102,7 +102,7 @@ def main():
     
     st.subheader("👷 Labor / Services")
     labor_data = st.data_editor(
-        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 95.0}]),
+        pd.DataFrame([{"Service": "", "Hours": 1.0, "Rate": 30.0}]),
         num_rows="dynamic",
         key="labor_editor",
         use_container_width=True
@@ -178,4 +178,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
