@@ -54,12 +54,12 @@ def get_next_quote_number(sheet):
         if '-' in last_entry:
             try:
                 last_num = int(last_entry.split('-')[1])
-                return f"AVL-{last_num + 1}"
+                return f"DL-{last_num + 1}"
             except ValueError:
-                return "AVL-1000"
-        return "AVL-1000"
+                return "DL-1000"
+        return "DL-1000"
     except:
-        return "AVL-1000"
+        return "DL-1000"
 
 class PDF(FPDF):
     def header(self):
@@ -176,7 +176,7 @@ def main():
     if 'active_quote_num' not in st.session_state:
         st.session_state.active_quote_num = None
 
-    st.title("D&L AV Quote Tool")
+    st.title("AV Quote Tool")
     st.markdown("---")
 
     sheet = connect_to_sheets()
@@ -272,3 +272,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
